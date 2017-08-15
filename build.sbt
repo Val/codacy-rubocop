@@ -26,17 +26,17 @@ enablePlugins(DockerPlugin)
 
 version in Docker := "1.0"
 
-val filename = "src/main/resources/docs/patterns.json"
+lazy val toolVersion = TaskKey[String]("The version of the underlying tool retrieved from patterns.json")
 
-val toolMap = JSON.parseFull(Source.fromFile(filename).getLines().mkString).get.asInstanceOf[Map[String,String]]
-
-val defaultVersion = "0.49.0"
-
-val rubocopVersion = { val jsonVersion = toolMap("version")
-  if(jsonVersion.isEmpty) defaultVersion else jsonVersion
+toolVersion := {
+  val jsonFile = (resourceDirectory in Compile).value / "docs" / "patterns.json"
+  val toolMap = JSON.parseFull(Source.fromFile(jsonFile).getLines().mkString)
+    .getOrElse(throw new Exception("patterns.json is not a valid json"))
+    .asInstanceOf[Map[String, String]]
+  toolMap.getOrElse[String]("version", throw new Exception("Failed to retrieve 'version' from patterns.json"))
 }
 
-val installAll =
+def installAll(toolVersion: String) =
   s"""echo -n "" > /etc/apk/repositories
      |&& echo "http://dl-cdn.alpinelinux.org/alpine/v3.6/main" >> /etc/apk/repositories
      |&& echo "http://dl-cdn.alpinelinux.org/alpine/v3.6/community" >> /etc/apk/repositories
@@ -46,7 +46,7 @@ val installAll =
      |&& gem install activesupport
      |&& gem install parser:2.4.0.0
      |&& gem install pry
-     |&& gem install rubocop:$rubocopVersion
+     |&& gem install rubocop:$toolVersion
      |&& gem install rubocop-migrations
      |&& gem install rubocop-rspec
      |&& gem install lingohub-rubocop
@@ -73,14 +73,16 @@ daemonGroup in Docker := dockerGroup
 
 dockerBaseImage := "develar/java"
 
-dockerCommands := dockerCommands.value.flatMap {
-  case cmd@Cmd("WORKDIR", _) => List(cmd,
-    Cmd("RUN", installAll)
-  )
-  case cmd@(Cmd("ADD", "opt /opt")) => List(cmd,
-    Cmd("RUN", "mv /opt/docker/docs /docs"),
-    Cmd("RUN", s"adduser -u 2004 -D $dockerUser"),
-    ExecCmd("RUN", Seq("chown", "-R", s"$dockerUser:$dockerGroup", "/docs"): _*)
-  )
-  case other => List(other)
+dockerCommands := {
+  dockerCommands.dependsOn(toolVersion).value.flatMap {
+    case cmd@Cmd("WORKDIR", _) => List(cmd,
+      Cmd("RUN", installAll(toolVersion.value))
+    )
+    case cmd@(Cmd("ADD", "opt /opt")) => List(cmd,
+      Cmd("RUN", "mv /opt/docker/docs /docs"),
+      Cmd("RUN", s"adduser -u 2004 -D $dockerUser"),
+      ExecCmd("RUN", Seq("chown", "-R", s"$dockerUser:$dockerGroup", "/docs"): _*)
+    )
+    case other => List(other)
+  }
 }
